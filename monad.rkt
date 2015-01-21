@@ -13,6 +13,13 @@
          List
          run-list
 
+         State
+         run-st
+         eval-st
+         exec-st
+         sget
+         sput
+
          IO
          (struct-out io-return)
          (struct-out io-begin)
@@ -77,6 +84,32 @@
 
 ;;---------------------------------------------------------------------------
 
+(define State (monad-class 'State
+                           (lambda (st f) (state (lambda (s0)
+                                                   (define-values (v s1) (run-st st s0))
+                                                   (run-st (f v) s1))))
+                           (lambda (v) (state (lambda (s0) (values v s0))))
+                           raise))
+
+(struct state (transformer) #:transparent
+        #:methods gen:monad [(define (monad->monad-class m) State)])
+
+(define (run-st m initial)
+  ((state-transformer ((determine State) m)) initial))
+
+(define (eval-st m initial)
+  (define-values (v final) (run-st m initial))
+  v)
+
+(define (exec-st m initial)
+  (define-values (v final) (run-st m initial))
+  final)
+
+(define sget (state (lambda (s0) (values s0 s0))))
+(define (sput a) (state (lambda (s0) (values (void) a))))
+
+;;---------------------------------------------------------------------------
+
 (define IO (monad-class 'IO
                         (lambda (io f) (io-begin io f))
                         (lambda (v) (io-return (lambda () v)))
@@ -120,6 +153,11 @@
                (mlet* ((_ (mdisplay "It's greater than or equal to ten.\n")))
                       (return 'done)))))
 
+  (define tick
+    (mlet* ((n sget)
+            (_ (sput (+ n 1))))
+           (return n)))
+
   (define oleg-example-mixed-monad
     (mlet* ((_ (mdisplay "Enter a number: "))
             (n mread)
@@ -136,9 +174,18 @@
 
 (module+ main
   (require (submod ".." examples))
-  (run-io io-demo)
-  (run-io mnewline)
-  (run-io (mdisplay "Next example!"))
-  (run-io mnewline)
-  (run-io mnewline)
-  (run-io oleg-example-mixed-monad))
+  (printf "After three ticks: ~a\n"
+          (eval-st (mlet* ((_ tick)
+                           (_ tick)
+                           (_ tick))
+                          sget)
+                   0))
+  (for-each run-io (list io-demo
+                         mnewline
+                         (mdisplay "Next example!")
+                         mnewline
+                         mnewline
+                         (mlet* ((result oleg-example-mixed-monad)
+                                 (_ (mdisplay "Evens: "))
+                                 (_ (mdisplay result)))
+                                mnewline))))
