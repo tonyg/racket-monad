@@ -46,27 +46,25 @@
   #:fast-defaults ([null? (define (monad->monad-class m) List)]
                    [pair? (define (monad->monad-class m) List)]))
 
-(define (determine a)
-  (define (walk ma)
-    (match ma
-      [(? monad?)
-       (if (eq? (monad->monad-class ma) a)
-           ma
-           (error 'determine
-                  "Monad-class ~a is incompatible with required monad-class ~a"
-                  (monad-class-name (monad->monad-class ma))
-                  (monad-class-name a)))]
-      [(return v) ((monad-class-returner a) v)]
-      [(? exn?) ((monad-class-failer a) ma)]
-      [(indeterminate-bind mb b->mc) (bind (walk mb) b->mc)]
-      [_ (error 'determine "Could not coerce ~v into monad class ~a" ma (monad-class-name a))]))
-  walk)
+(define (determine a ma)
+  (match ma
+    [(? monad?)
+     (if (eq? (monad->monad-class ma) a)
+         ma
+         (error 'determine
+                "Monad-class ~a is incompatible with required monad-class ~a"
+                (monad-class-name (monad->monad-class ma))
+                (monad-class-name a)))]
+    [(return v) ((monad-class-returner a) v)]
+    [(? exn?) ((monad-class-failer a) ma)]
+    [(indeterminate-bind mb b->mc) (bind (determine a mb) b->mc)]
+    [_ (error 'determine "Could not coerce ~v into monad class ~a" ma (monad-class-name a))]))
 
 (define (bind ma a->mb)
   (cond
    [(monad? ma)
     (define a (monad->monad-class ma))
-    ((determine a) ((monad-class-binder a) ma a->mb))]
+    (determine a ((monad-class-binder a) ma a->mb))]
    [(return? ma) (a->mb (return-value ma))]
    [(or (exn? ma) (indeterminate-bind? ma)) (indeterminate-bind ma a->mb)]
    [else (error 'bind "Could not interpret ~v as a monad" ma)]))
@@ -76,11 +74,11 @@
 ;;---------------------------------------------------------------------------
 
 (define List (monad-class 'List
-                          (lambda (xs f) (append-map (compose (determine List) f) xs))
+                          (lambda (xs f) (append-map (lambda (x) (determine List (f x))) xs))
                           (lambda (x) (list x))
                           (lambda (e) '())))
 
-(define (run-list xs) ((determine List) xs))
+(define (run-list xs) (determine List xs))
 
 ;;---------------------------------------------------------------------------
 
@@ -95,7 +93,7 @@
         #:methods gen:monad [(define (monad->monad-class m) State)])
 
 (define (run-st m initial)
-  ((state-transformer ((determine State) m)) initial))
+  ((state-transformer (determine State m)) initial))
 
 (define (eval-st m initial)
   (define-values (v final) (run-st m initial))
@@ -122,7 +120,7 @@
         #:methods gen:monad [(define (monad->monad-class m) IO)])
 
 (define (run-io io)
-  (match ((determine IO) io)
+  (match (determine IO io)
     [(io-return thunk) (thunk)]
     [(io-begin io k) (run-io (call-with-values (lambda () (run-io io)) k))]))
 
