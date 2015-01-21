@@ -10,6 +10,10 @@
          return
          fail
 
+         <-
+         do
+         lift1
+
          List
          run-list
 
@@ -24,10 +28,12 @@
          (struct-out io-return)
          (struct-out io-begin)
          run-io
+         mprintf
          mdisplay
          mnewline
          mread)
 
+(require (for-syntax racket/base))
 (require racket/generic)
 (require racket/match)
 (require (only-in racket/list append-map))
@@ -70,6 +76,28 @@
    [else (error 'bind "Could not interpret ~v as a monad" ma)]))
 
 (define (fail fmt . args) (exn:fail (apply format fmt args) (current-continuation-marks)))
+
+;;---------------------------------------------------------------------------
+
+(define-syntax <-
+  (lambda (stx)
+    (raise-syntax-error #f "Illegal use of <- outside monadic (do)" stx)))
+
+(define-syntax do
+  (syntax-rules (<-)
+    [(_ mexp) mexp]
+    [(_ #:let [pat exp] rest ...)
+     (match-let ((pat exp)) (do rest ...))]
+    [(_ pat <- mexp rest ...)
+     (bind mexp (match-lambda
+                 [pat (do rest ...)]
+                 [_ (fail "monadic (do) pattern failure: ~v" #'pat)]))]
+    [(_ mexp rest ...)
+     (bind mexp (lambda (ignored) (do rest ...)))]))
+
+(define ((lift1 f) m)
+  (do i <- m
+      (return (f i))))
 
 ;;---------------------------------------------------------------------------
 
@@ -124,6 +152,7 @@
     [(io-return thunk) (thunk)]
     [(io-begin io k) (run-io (call-with-values (lambda () (run-io io)) k))]))
 
+(define (mprintf fmt . args) (io-return (lambda () (apply printf fmt args))))
 (define (mdisplay x) (io-return (lambda () (display x))))
 (define mnewline (io-return newline))
 (define mread (io-return (lambda () (read))))
@@ -133,57 +162,48 @@
 (module+ examples
   (provide (all-defined-out))
 
-  (define-syntax mlet*
-    (syntax-rules ()
-      ((_ () mexpN) mexpN)
-      ((_ ((pat mexp) rest ...) mexpN)
-       (bind mexp (match-lambda
-                   [pat (mlet* (rest ...) mexpN)]
-                   [_ (fail "mlet* pattern failure: ~v" #'pat)])))))
-
   (define io-demo
-    (mlet* ((_ (mdisplay "Enter a number: "))
-            (n mread))
-           (if (< n 10)
-               (mlet* ((_ (mdisplay "It's less than ten. Try again."))
-                       (_ mnewline))
-                      io-demo)
-               (mlet* ((_ (mdisplay "It's greater than or equal to ten.\n")))
-                      (return 'done)))))
+    (do (mdisplay "Enter a number: ")
+        n <- mread
+        (if (< n 10)
+            (do (mdisplay "It's less than ten. Try again.")
+                mnewline
+                io-demo)
+            (do (mdisplay "It's greater than or equal to ten.\n")
+                (return 'done)))))
 
   (define tick
-    (mlet* ((n sget)
-            (_ (sput (+ n 1))))
-           (return n)))
+    (do n <- sget
+        (sput (+ n 1))
+        (return n)))
 
   (define oleg-example-mixed-monad
-    (mlet* ((_ (mdisplay "Enter a number: "))
-            (n mread)
-            (all-n (return (for/list ((i n)) i)))
-            (evens (return (run-list (mlet* ((i all-n))
-                                            (if (even? i)
-                                                (return i)
-                                                (fail "odd"))))))
-            (_ (mdisplay "Computed "))
-            (_ (mdisplay (length evens)))
-            (_ (mdisplay " evens."))
-            (_ mnewline))
-           (return evens))))
+    (do (mdisplay "Enter a number: ")
+        n <- mread
+        all-n <- (return (for/list ((i n)) i))
+        evens <- (return (run-list (do i <- all-n
+                                       (if (even? i)
+                                           (return i)
+                                           (fail "odd")))))
+        #:let [count (length evens)]
+        (mprintf "Computed ~a evens." count)
+        mnewline
+        (return evens))))
 
 (module+ main
   (require (submod ".." examples))
   (printf "After three ticks: ~a\n"
-          (eval-st (mlet* ((_ tick)
-                           (_ tick)
-                           (_ tick))
-                          sget)
+          (eval-st (do tick
+                       tick
+                       tick
+                       sget)
                    0))
   (for-each run-io (list io-demo
                          mnewline
                          (mdisplay "Next example!")
                          mnewline
                          mnewline
-                         (mlet* ((result oleg-example-mixed-monad)
-                                 (_ (mdisplay "Evens: "))
-                                 (_ (mdisplay result)))
-                                mnewline))))
+                         (do result <- oleg-example-mixed-monad
+                             (mdisplay "Evens: ")
+                             (mdisplay result)
+                             mnewline))))
