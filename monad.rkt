@@ -4,7 +4,7 @@
          monad?
          gen:monad
          monad->monad-class
-         determine
+         determine-monad
 
          bind
          return
@@ -14,6 +14,7 @@
          do
          lift1
 
+         Identity
          List
 
          State
@@ -37,46 +38,57 @@
 (require racket/match)
 (require (only-in racket/list append-map))
 
-(define (determine a ma)
-  (match ma
-    [(? monad?)
-     (if (eq? (monad->monad-class ma) a)
-         ma
-         (error 'determine
-                "Monad-class ~a is incompatible with required monad-class ~a"
-                (monad-class-name (monad->monad-class ma))
-                (monad-class-name a)))]
-    [(return v) ((monad-class-returner a) v)]
-    [(? exn?) ((monad-class-failer a) ma)]
-    [(indeterminate-bind mb b->mc) (bind (determine a mb) b->mc)]
-    [_ (error 'determine "Could not coerce ~v into monad class ~a" ma (monad-class-name a))]))
+(define-generics monad
+  (monad->monad-class monad)
+  #:defaults ([null? (define (monad->monad-class m) List)]
+              [pair? (define (monad->monad-class m) List)]
+              [exn? (define (monad->monad-class m) Exception)]))
 
 (struct monad-class (name ;; Symbol
                      binder ;; (M a) (b -> (M b)) -> (M b)
                      returner ;; a -> (M a)
                      failer ;; exn -> (M a)
+                     determiner ;; (M a) N -> (N a)
                      )
         #:transparent
-        #:property prop:procedure determine)
+        #:property prop:procedure (lambda (N ma)
+                                    ((monad-class-determiner (monad->monad-class ma)) N ma)))
 
-(struct return (value) #:transparent)
-(struct indeterminate-bind (ma a->mb) #:transparent)
+(struct return (value) #:transparent
+        #:methods gen:monad [(define (monad->monad-class m) Identity)])
 
-(define-generics monad
-  (monad->monad-class monad)
-  #:fast-defaults ([null? (define (monad->monad-class m) List)]
-                   [pair? (define (monad->monad-class m) List)]))
+(define Identity (monad-class 'Identity
+                              (lambda (r f) (f (return-value r)))
+                              return
+                              raise
+                              (lambda (N r) ((monad-class-returner N) (return-value r)))))
 
-(define (bind ma a->mb)
-  (cond
-   [(monad? ma)
-    (define A (monad->monad-class ma))
-    (A ((monad-class-binder A) ma a->mb))]
-   [(return? ma) (a->mb (return-value ma))]
-   [(or (exn? ma) (indeterminate-bind? ma)) (indeterminate-bind ma a->mb)]
-   [else (error 'bind "Could not interpret ~v as a monad" ma)]))
+(struct indeterminate-bind (ma a->mb) #:transparent
+        #:methods gen:monad [(define (monad->monad-class m) Indeterminate)])
 
+(define Indeterminate (monad-class 'Indeterminate
+                                   indeterminate-bind
+                                   return
+                                   raise
+                                   (lambda (N m) (bind (N (indeterminate-bind-ma m))
+                                                       (indeterminate-bind-a->mb m)))))
+
+(define Exception (monad-class 'Exception
+                               indeterminate-bind
+                               return
+                               raise
+                               (lambda (N e) ((monad-class-failer N) e))))
+
+(define (bind ma a->mb) ((monad-class-binder (monad->monad-class ma)) ma a->mb))
 (define (fail fmt . args) (exn:fail (apply format fmt args) (current-continuation-marks)))
+
+(define (determine-monad N ma)
+  (if (eq? (monad->monad-class ma) N)
+      ma
+      (error 'determine-monad
+             "Monad-class ~a is incompatible with required monad-class ~a"
+             (monad-class-name (monad->monad-class ma))
+             (monad-class-name N))))
 
 ;;---------------------------------------------------------------------------
 
@@ -107,7 +119,8 @@
 (define List (monad-class 'List
                           (lambda (xs f) (append-map (lambda (x) (List (f x))) xs))
                           (lambda (x) (list x))
-                          (lambda (e) '())))
+                          (lambda (e) '())
+                          determine-monad))
 
 ;;---------------------------------------------------------------------------
 
@@ -116,7 +129,8 @@
                                                    (define-values (v s1) (run-st st s0))
                                                    (run-st (f v) s1))))
                            (lambda (v) (state (lambda (s0) (values v s0))))
-                           raise))
+                           raise
+                           determine-monad))
 
 (struct state (transformer) #:transparent
         #:methods gen:monad [(define (monad->monad-class m) State)])
@@ -140,7 +154,8 @@
 (define IO (monad-class 'IO
                         (lambda (io f) (io-begin io f))
                         (lambda (v) (io-return (lambda () v)))
-                        raise))
+                        raise
+                        determine-monad))
 
 (struct io-return (thunk) #:transparent
         #:methods gen:monad [(define (monad->monad-class m) IO)])
