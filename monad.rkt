@@ -15,7 +15,6 @@
          lift1
 
          List
-         run-list
 
          State
          run-st
@@ -38,20 +37,6 @@
 (require racket/match)
 (require (only-in racket/list append-map))
 
-(struct monad-class (name ;; Symbol
-                     binder ;; (M a) (b -> (M b)) -> (M b)
-                     returner ;; a -> (M a)
-                     failer ;; exn -> (M a)
-                     ) #:transparent)
-
-(struct return (value) #:transparent)
-(struct indeterminate-bind (ma a->mb) #:transparent)
-
-(define-generics monad
-  (monad->monad-class monad)
-  #:fast-defaults ([null? (define (monad->monad-class m) List)]
-                   [pair? (define (monad->monad-class m) List)]))
-
 (define (determine a ma)
   (match ma
     [(? monad?)
@@ -66,11 +51,27 @@
     [(indeterminate-bind mb b->mc) (bind (determine a mb) b->mc)]
     [_ (error 'determine "Could not coerce ~v into monad class ~a" ma (monad-class-name a))]))
 
+(struct monad-class (name ;; Symbol
+                     binder ;; (M a) (b -> (M b)) -> (M b)
+                     returner ;; a -> (M a)
+                     failer ;; exn -> (M a)
+                     )
+        #:transparent
+        #:property prop:procedure determine)
+
+(struct return (value) #:transparent)
+(struct indeterminate-bind (ma a->mb) #:transparent)
+
+(define-generics monad
+  (monad->monad-class monad)
+  #:fast-defaults ([null? (define (monad->monad-class m) List)]
+                   [pair? (define (monad->monad-class m) List)]))
+
 (define (bind ma a->mb)
   (cond
    [(monad? ma)
-    (define a (monad->monad-class ma))
-    (determine a ((monad-class-binder a) ma a->mb))]
+    (define A (monad->monad-class ma))
+    (A ((monad-class-binder A) ma a->mb))]
    [(return? ma) (a->mb (return-value ma))]
    [(or (exn? ma) (indeterminate-bind? ma)) (indeterminate-bind ma a->mb)]
    [else (error 'bind "Could not interpret ~v as a monad" ma)]))
@@ -92,6 +93,8 @@
      (bind mexp (match-lambda
                  [pat (do rest ...)]
                  [_ (fail "monadic (do) pattern failure: ~v" #'pat)]))]
+    [(_ #:guard exp rest ...)
+     (if exp (do rest ...) (fail "monadic (do) guard failed: ~v" #'exp))]
     [(_ mexp rest ...)
      (bind mexp (lambda (ignored) (do rest ...)))]))
 
@@ -102,11 +105,9 @@
 ;;---------------------------------------------------------------------------
 
 (define List (monad-class 'List
-                          (lambda (xs f) (append-map (lambda (x) (determine List (f x))) xs))
+                          (lambda (xs f) (append-map (lambda (x) (List (f x))) xs))
                           (lambda (x) (list x))
                           (lambda (e) '())))
-
-(define (run-list xs) (determine List xs))
 
 ;;---------------------------------------------------------------------------
 
@@ -121,7 +122,7 @@
         #:methods gen:monad [(define (monad->monad-class m) State)])
 
 (define (run-st m initial)
-  ((state-transformer (determine State m)) initial))
+  ((state-transformer (State m)) initial))
 
 (define (eval-st m initial)
   (define-values (v final) (run-st m initial))
@@ -148,7 +149,7 @@
         #:methods gen:monad [(define (monad->monad-class m) IO)])
 
 (define (run-io io)
-  (match (determine IO io)
+  (match (IO io)
     [(io-return thunk) (thunk)]
     [(io-begin io k) (run-io (call-with-values (lambda () (run-io io)) k))]))
 
@@ -181,10 +182,9 @@
     (do (mdisplay "Enter a number: ")
         n <- mread
         all-n <- (return (for/list ((i n)) i))
-        evens <- (return (run-list (do i <- all-n
-                                       (if (even? i)
-                                           (return i)
-                                           (fail "odd")))))
+        evens <- (return (List (do i <- all-n
+                                   #:guard (even? i)
+                                   (return i))))
         #:let [count (length evens)]
         (mprintf "Computed ~a evens." count)
         mnewline
