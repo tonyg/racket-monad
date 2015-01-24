@@ -1,6 +1,9 @@
 #lang racket/base
+;; Monads in Racket, including polymorphic bind, return and fail.
+;; Haskell-like do-notation.
 
-(provide (struct-out monad-class)
+(provide define-monad-class
+         (struct-out monad-class)
          monad?
          gen:monad
          monad->monad-class
