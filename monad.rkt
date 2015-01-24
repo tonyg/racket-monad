@@ -278,12 +278,12 @@
                        tick
                        sget)
                    0))
-  (for-each run-io (list io-demo
-                         mnewline
-                         (mdisplay "Next example!")
-                         mnewline
-                         mnewline
-                         (do result <- oleg-example-mixed-monad
-                             (mdisplay "Evens: ")
-                             (mdisplay result)
-                             mnewline))))
+  (run-io (do io-demo
+              mnewline
+              (mdisplay "Next example!")
+              mnewline
+              mnewline
+              result <- oleg-example-mixed-monad
+              (mdisplay "Evens: ")
+              (mdisplay result)
+              mnewline)))
