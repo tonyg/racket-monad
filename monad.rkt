@@ -19,6 +19,7 @@
 
          Identity
          List
+         Stream
 
          State
          run-st
@@ -45,6 +46,7 @@
   (monad->monad-class monad)
   #:defaults ([null? (define (monad->monad-class m) List)]
               [pair? (define (monad->monad-class m) List)]
+              [stream? (define (monad->monad-class m) Stream)]
               [exn? (define (monad->monad-class m) Exception)]))
 
 ;; A MonadClass represents the behaviour associated with a given monad
@@ -174,7 +176,25 @@
 (define-monad-class List
   (lambda (xs f) (append-map (lambda (x) (List (f x))) xs))
   (lambda (x) (list x))
-  #:fail (lambda (e) '()))
+  #:fail (lambda (e) '())
+  #:determine (lambda (N xs) (if (eq? N Stream) xs (determine-monad N xs))))
+
+;;---------------------------------------------------------------------------
+;; Stream monad
+
+(require racket/stream)
+
+(define-monad-class Stream
+  (lambda (s f)
+    (if (stream-empty? s)
+        empty-stream
+        (let walk ((items (Stream (f (stream-first s)))))
+          (if (stream-empty? items)
+              (bind (stream-rest s) f)
+              (stream-cons (stream-first items) (walk (stream-rest items)))))))
+  (lambda (x) (stream-cons x empty-stream))
+  #:fail (lambda (e) empty-stream)
+  #:determine (lambda (N s) (if (eq? N List) (stream->list s) (determine-monad N s))))
 
 ;;---------------------------------------------------------------------------
 ;; State monad
