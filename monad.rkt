@@ -272,13 +272,13 @@
 
 (module+ main
   (require (submod ".." examples))
-  (printf "After three ticks: ~a\n"
-          (eval-st (do tick
-                       tick
-                       tick
-                       sget)
-                   0))
-  (run-io (do io-demo
+
+  (run-io (do (mprintf "After three ticks: ~a\n" (eval-st (do tick
+                                                              tick
+                                                              tick
+                                                              sget)
+                                                          0))
+              io-demo
               mnewline
               (mdisplay "Next example!")
               mnewline
