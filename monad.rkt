@@ -8,6 +8,7 @@
          gen:monad
          monad->monad-class
          determine-monad
+         co-determine-monad
 
          bind
          return
@@ -65,7 +66,7 @@
    ;; exn -> (M a)
    ;; Fail operator for this monad. Usually `raise`.
    failer
-   ;; (M a) N -> (N a)
+   ;; N (M a) -> (N a)
    ;; Convert or coerce a monad instance into a *possibly-different
    ;; monad* -- so long as it is compatible! This is used to get
    ;; return polymorphism: the Identity monad is considered
@@ -73,8 +74,11 @@
    ;; chains of binds until we learn which monad we should be working
    ;; in: the Indeterminate monad-class below waits to learn the
    ;; intended monad, and re-applies the bind operation with stored
-   ;; arguments.
+   ;; arguments. // An instance of the double-dispatch pattern;
+   ;; "determiner" of M is called first, and delegates to
+   ;; "co-determiner" of its N argument if it is failing.
    determiner
+   co-determiner
    )
   #:transparent
   #:property prop:procedure
@@ -84,8 +88,24 @@
 ;; and determiner functions.
 (define (monad-class* name binder returner
                       #:fail [failer raise]
-                      #:determine [determiner determine-monad])
-  (monad-class name binder returner failer determiner))
+                      #:determine [determiner determine-monad]
+                      #:co-determine [co-determiner co-determine-monad])
+  (monad-class name binder returner failer determiner co-determiner))
+
+;; Default determiner for MonadClasses. Most monads will use this
+;; determiner. Checks the monad instance: if it is already of the
+;; desired type, return it; otherwise, delegate to N's co-determiner.
+(define (determine-monad N ma)
+  (if (eq? (monad->monad-class ma) N)
+      ma
+      ((monad-class-co-determiner N) N ma)))
+
+;; Default co-determiner for MonadClasses.
+(define (co-determine-monad N ma)
+  (error 'co-determine-monad
+         "Monad-class ~a is incompatible with required monad-class ~a"
+         (monad-class-name (monad->monad-class ma))
+         (monad-class-name N)))
 
 ;; Syntax for defining MonadClasses.
 (define-syntax-rule (define-monad-class Name rest ...)
@@ -133,17 +153,6 @@
 ;; Simply constructs and returns an exception, *without* raising it.
 (define (fail fmt . args) (exn:fail (apply format fmt args) (current-continuation-marks)))
 
-;; Default determiner for MonadClasses. Most monads will use this
-;; determiner. Checks the monad instance: if it is already of the
-;; desired type, return it; otherwise, raise an exception.
-(define (determine-monad N ma)
-  (if (eq? (monad->monad-class ma) N)
-      ma
-      (error 'determine-monad
-             "Monad-class ~a is incompatible with required monad-class ~a"
-             (monad-class-name (monad->monad-class ma))
-             (monad-class-name N))))
-
 ;;---------------------------------------------------------------------------
 ;; Haskell-like do-notation
 
@@ -176,8 +185,7 @@
 (define-monad-class List
   (lambda (xs f) (append-map (lambda (x) (List (f x))) xs))
   (lambda (x) (list x))
-  #:fail (lambda (e) '())
-  #:determine (lambda (N xs) (if (eq? N Stream) xs (determine-monad N xs))))
+  #:fail (lambda (e) '()))
 
 ;;---------------------------------------------------------------------------
 ;; Stream monad
@@ -194,7 +202,8 @@
               (stream-cons (stream-first items) (walk (stream-rest items)))))))
   (lambda (x) (stream-cons x empty-stream))
   #:fail (lambda (e) empty-stream)
-  #:determine (lambda (N s) (if (eq? N List) (stream->list s) (determine-monad N s))))
+  #:determine (lambda (N s) (if (eq? N List) (stream->list s) (determine-monad N s)))
+  #:co-determine (lambda (N ma) (if (list? ma) ma (co-determine-monad N ma))))
 
 ;;---------------------------------------------------------------------------
 ;; State monad
